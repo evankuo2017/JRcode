@@ -8,16 +8,18 @@ export interface Problem {
   topicTags: string[];
 }
 
+export type TurnKind = "opening" | "reply" | "hint" | "check_in";
+
 export interface VisibleMessage {
   role: "user" | "assistant";
-  reason?: "opening" | "reply" | "hint";
+  reason?: TurnKind;
   text: string;
 }
 
 export type ServerEvent =
   | { type: "problem"; problem: Problem }
   | { type: "history"; items: VisibleMessage[] }
-  | { type: "message_start"; reason: "opening" | "reply" | "hint" }
+  | { type: "message_start"; reason: TurnKind }
   | { type: "token"; text: string }
   | { type: "message_end"; interrupted?: boolean }
   | { type: "notice"; level: "info" | "warn" | "error"; text: string };
@@ -25,7 +27,7 @@ export type ServerEvent =
 export interface ChatItem {
   id: number;
   role: "user" | "assistant" | "notice";
-  reason?: "opening" | "reply" | "hint";
+  reason?: TurnKind;
   level?: "info" | "warn" | "error";
   text: string;
   streaming?: boolean;

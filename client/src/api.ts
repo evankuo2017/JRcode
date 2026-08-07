@@ -60,3 +60,14 @@ export function sendSnapshot(
 export function endSession(sessionId: string): Promise<Response> {
   return fetch(`/api/session/${sessionId}`, { method: "DELETE" });
 }
+
+export async function getReflection(
+  sessionId: string
+): Promise<{ reflection: string } | { error: string }> {
+  try {
+    const res = await fetch(`/api/session/${sessionId}/reflection`, { method: "POST" });
+    return res.json();
+  } catch {
+    return { error: "無法連上伺服器，反思暫時無法產生。" };
+  }
+}

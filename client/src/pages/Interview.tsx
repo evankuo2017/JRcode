@@ -4,7 +4,8 @@ import Editor from "@monaco-editor/react";
 import { useAgentStream } from "../hooks/useAgentStream";
 import { useSpeech } from "../hooks/useSpeech";
 import { useTTS } from "../hooks/useTTS";
-import { endSession, sendInterrupt, sendMessage, sendSnapshot } from "../api";
+import { endSession, getReflection, sendInterrupt, sendMessage, sendSnapshot } from "../api";
+import ReflectionScreen from "../components/ReflectionScreen";
 import type { Problem } from "../types";
 
 const LANGUAGES = [
@@ -46,6 +47,14 @@ export default function Interview() {
   const [language, setLanguage] = useState("python");
   const [input, setInput] = useState("");
   const chatEndRef = useRef<HTMLDivElement>(null);
+
+  // 逐字稿預設隱藏——真實使用者練的是「聽」，逐字稿只是給想回看的人用的手動選項
+  const [showTranscript, setShowTranscript] = useState(false);
+
+  // 結束模擬後的反思畫面
+  const [ending, setEnding] = useState(false);
+  const [reflection, setReflection] = useState<string | null>(null);
+  const [reflectionError, setReflectionError] = useState<string | null>(null);
 
   // 沒有 session 直接回首頁
   useEffect(() => {
@@ -122,10 +131,33 @@ export default function Interview() {
   const finish = async () => {
     if (!window.confirm("確定要結束這場面試嗎？結束後無法繼續。")) return;
     tts.cancel();
+    speech.stop();
+    setEnding(true);
+    if (sessionId) {
+      const result = await getReflection(sessionId);
+      if ("reflection" in result) setReflection(result.reflection);
+      else setReflectionError(result.error);
+    } else {
+      setReflectionError("找不到這場面試的 session。");
+    }
+  };
+
+  const backToHome = async () => {
     if (sessionId) await endSession(sessionId);
     sessionStorage.clear();
     navigate("/");
   };
+
+  if (ending) {
+    return (
+      <ReflectionScreen
+        problem={problem}
+        reflection={reflection}
+        error={reflectionError}
+        onClose={backToHome}
+      />
+    );
+  }
 
   return (
     <div className="interview">
@@ -221,24 +253,36 @@ export default function Interview() {
 
       {/* 下：對話區 */}
       <footer className="chat">
-        <div className="chat-log">
-          {items.map((it) => (
-            <div key={it.id} className={`msg ${it.role} ${it.level ?? ""}`}>
-              {it.role === "assistant" && (
-                <span className="who">
-                  面試官{it.reason === "hint" ? "（主動提示）" : ""}：
-                </span>
-              )}
-              {it.role === "user" && <span className="who">你：</span>}
-              <span className="text">
-                {it.text}
-                {it.streaming && <span className="cursor">▍</span>}
-                {it.interrupted && <em className="interrupted">（被打斷）</em>}
-              </span>
-            </div>
-          ))}
-          <div ref={chatEndRef} />
+        <div className="chat-header">
+          <button className="transcript-toggle" onClick={() => setShowTranscript((v) => !v)}>
+            {showTranscript ? "隱藏逐字稿" : "顯示逐字稿"}
+          </button>
         </div>
+        {showTranscript ? (
+          <div className="chat-log">
+            {items.map((it) => (
+              <div key={it.id} className={`msg ${it.role} ${it.level ?? ""}`}>
+                {it.role === "assistant" && (
+                  <span className="who">
+                    面試官
+                    {it.reason === "hint" ? "（主動提示）" : it.reason === "check_in" ? "（關心）" : ""}：
+                  </span>
+                )}
+                {it.role === "user" && <span className="who">你：</span>}
+                <span className="text">
+                  {it.text}
+                  {it.streaming && <span className="cursor">▍</span>}
+                  {it.interrupted && <em className="interrupted">（被打斷）</em>}
+                </span>
+              </div>
+            ))}
+            <div ref={chatEndRef} />
+          </div>
+        ) : (
+          <div className={`turn-indicator ${agentSpeaking ? "agent-speaking" : speech.listening ? "user-turn" : "idle"}`}>
+            {agentSpeaking ? "🗣️ 面試官說話中" : speech.listening ? "🎙️ 換你說了" : "…"}
+          </div>
+        )}
         <div className="chat-input">
           <button
             className={`mic-btn ${speech.listening ? "on" : ""}`}

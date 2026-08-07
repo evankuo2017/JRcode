@@ -15,6 +15,15 @@ export const config = {
     process.env.LLM_BASE_URL ??
     "https://generativelanguage.googleapis.com/v1beta/openai/",
   model: process.env.LLM_MODEL ?? "gemini-2.5-flash",
+  /** 主模型 429 時依序切換的備援模型（Gemini 各模型額度分開計算） */
+  fallbackModels: (
+    process.env.LLM_FALLBACK_MODELS ?? "gemini-2.5-flash-lite,gemini-2.0-flash"
+  )
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean),
+  /** 觀察引擎的決策呼叫用便宜模型，把主模型額度留給對話 */
+  observerModel: process.env.OBSERVER_MODEL ?? "gemini-2.5-flash-lite",
   ttsVoice: process.env.TTS_VOICE ?? "zh-TW-HsiaoChenNeural",
   dataDir: path.join(__dirname, "..", "data"),
 };

@@ -88,6 +88,21 @@ app.post("/api/session/:id/snapshot", (req, res) => {
   res.json({ ok: true });
 });
 
+/** 面試結束後的自由格式反思（獨立於 DELETE，讓使用者在 session 銷毀前先讀到） */
+app.post("/api/session/:id/reflection", async (req, res) => {
+  const session = sessions.get(req.params.id);
+  if (!session) {
+    res.status(404).json({ error: "session not found" });
+    return;
+  }
+  try {
+    const reflection = await session.getReflection();
+    res.json({ reflection });
+  } catch (err) {
+    res.status(502).json({ error: (err as Error).message });
+  }
+});
+
 /** 文字轉語音（Edge TTS，免費免 key；前端逐句呼叫） */
 app.post("/api/tts", async (req, res) => {
   const text = String(req.body?.text ?? "").trim();

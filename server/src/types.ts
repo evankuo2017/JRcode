@@ -16,9 +16,11 @@ export interface ChatMessage {
   content: string;
 }
 
+export type TurnKind = "opening" | "reply" | "hint" | "check_in";
+
 export interface VisibleMessage {
   role: "user" | "assistant";
-  reason?: "opening" | "reply" | "hint";
+  reason?: TurnKind;
   text: string;
 }
 
@@ -26,7 +28,7 @@ export interface VisibleMessage {
 export type ServerEvent =
   | { type: "problem"; problem: Problem }
   | { type: "history"; items: VisibleMessage[] }
-  | { type: "message_start"; reason: "opening" | "reply" | "hint" }
+  | { type: "message_start"; reason: TurnKind }
   | { type: "token"; text: string }
   | { type: "message_end"; interrupted?: boolean }
   | { type: "notice"; level: "info" | "warn" | "error"; text: string };
