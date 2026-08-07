@@ -1,0 +1,6 @@
+# 下載的 Ollama 執行檔（用 ./install_ollama.sh 重建）
+ollama/
+# 下載的模型（用 ./pull_model.sh 重建，約 18GB）
+models/
+# 執行產生的日誌
+*.log
