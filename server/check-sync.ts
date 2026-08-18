@@ -1,5 +1,5 @@
 /**
- * 同步機制驗證：起一個假的 OpenAI 相容伺服器，用真實的 Session 程式碼路徑跑三個情境。
+ * 同步機制驗證：起一個假的 OpenAI 相容伺服器，用真實的 Session 程式碼路徑跑四個情境。
  * 慢速吐 token（首字 600ms）才測得出「思考中」與「說話中」的差別。
  */
 import http from "node:http";
@@ -152,6 +152,27 @@ await new Promise<void>((r) => fake.listen(PORT, () => r()));
     thinkingEvents.length >= 2 && thinkingEvents[thinkingEvents.length - 1].active === false,
     `${thinkingEvents.length} 個 thinking 事件，最後一個 active=${thinkingEvents[thinkingEvents.length - 1]?.active}`
   );
+  s.dispose();
+}
+
+// ───────────────────────── 情境 4：按下結束 → agent 停擺 ─────────────────────────
+{
+  const s = new Session(problem);
+  const { events, res } = makeClient();
+  s.attachClient(res);
+  await sleep(2000); // 開場白講完
+  const before = events.filter((e) => e.type === "message_start").length;
+
+  s.stopAgent(); // 使用者按下「結束模擬」
+
+  const spoke = await (s as any).runTurn("（系統訊息：給提示）", "hint");
+  await sleep(1200);
+  const after = events.filter((e) => e.type === "message_start").length;
+  const timerCleared = (s as any).observerTimer === null;
+
+  check("情境4 結束後不再發話", spoke === false, `runTurn 回傳 ${spoke}`);
+  check("情境4 畫面沒有多一則訊息", after === before, `message_start ${before} → ${after}`);
+  check("情境4 觀察引擎計時器已清掉", timerCleared, `observerTimer = ${(s as any).observerTimer}`);
   s.dispose();
 }
 

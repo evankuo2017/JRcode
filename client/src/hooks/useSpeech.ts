@@ -9,8 +9,11 @@ const BARGE_IN_MIN_CHARS = 3;
  * Chrome 只要你稍微停頓就給一個 final result，所以「嗯……我想一下……我覺得可以用雜湊表」
  * 會被切成三段。若每段都立刻送出，就變成三次發問、三次回覆、後面兩次各自打斷前一次。
  * 真人面試官是等你講完一段話才開口，所以這裡累積片段，靜下來才當成一次完整發言送出。
+ *
+ * 1 秒太短：面試中邊想邊講的停頓（「那就是說……嗯……我只要把」）動輒一秒以上，
+ * 會把一個完整想法切成好幾則訊息。寧可晚一點回應，也不要打斷別人的思路。
  */
-const UTTERANCE_SILENCE_MS = 1000;
+const UTTERANCE_SILENCE_MS = 1800;
 
 interface SpeechOptions {
   /** 面試官是不是還在講——只有講話中才需要打斷，也才需要防回音 */
@@ -35,6 +38,12 @@ export function useSpeech({ isAgentSpeaking, isSelfEcho, onBargeIn, onFinalResul
   const [supported, setSupported] = useState(true);
   const [listening, setListening] = useState(false);
   const [interim, setInterim] = useState("");
+  /**
+   * 已辨識定稿、但還在等他講完的文字。
+   * 必須顯示出來——Chrome 一把某段定稿，那段就從 interim 消失，
+   * 畫面上使用者的話會憑空不見，看起來就像系統沒收到。
+   */
+  const [pending, setPending] = useState("");
   const recognitionRef = useRef<any>(null);
   const callbacksRef = useRef({ isAgentSpeaking, isSelfEcho, onBargeIn, onFinalResult });
   callbacksRef.current = { isAgentSpeaking, isSelfEcho, onBargeIn, onFinalResult };
@@ -50,6 +59,7 @@ export function useSpeech({ isAgentSpeaking, isSelfEcho, onBargeIn, onFinalResul
     silenceTimerRef.current = null;
     const text = pendingRef.current.join("").trim();
     pendingRef.current = [];
+    setPending("");
     if (text) callbacksRef.current.onFinalResult(text);
   };
 
@@ -63,6 +73,7 @@ export function useSpeech({ isAgentSpeaking, isSelfEcho, onBargeIn, onFinalResul
     if (silenceTimerRef.current !== null) window.clearTimeout(silenceTimerRef.current);
     silenceTimerRef.current = null;
     pendingRef.current = [];
+    setPending("");
   };
 
   useEffect(() => {
@@ -87,6 +98,7 @@ export function useSpeech({ isAgentSpeaking, isSelfEcho, onBargeIn, onFinalResul
           if (cb.isSelfEcho(text)) continue; // 面試官自己的聲音，不能當成使用者發言送出去
           bargedRef.current = false; // 這句結束了，下一句重新判斷要不要打斷
           pendingRef.current.push(text); // 先累積，等他真的停下來才送
+          setPending(pendingRef.current.join(""));
         } else {
           interimText += r[0].transcript;
         }
@@ -115,10 +127,19 @@ export function useSpeech({ isAgentSpeaking, isSelfEcho, onBargeIn, onFinalResul
       bargedRef.current = false;
       // Chrome 會自動停止辨識；若使用者仍要聽就重啟
       if (shouldListenRef.current) {
+        // Chrome 有時還沒完全停就 start 會丟 InvalidStateError，隔一拍重試，
+        // 否則麥克風按鈕看起來是開的、實際上已經死了
         try {
           rec.start();
         } catch {
-          setListening(false);
+          setTimeout(() => {
+            if (!shouldListenRef.current) return;
+            try {
+              rec.start();
+            } catch {
+              setListening(false);
+            }
+          }, 250);
         }
       } else {
         setListening(false);
@@ -158,5 +179,5 @@ export function useSpeech({ isAgentSpeaking, isSelfEcho, onBargeIn, onFinalResul
     setListening(false);
   };
 
-  return { supported, listening, interim, start, stop };
+  return { supported, listening, interim, pending, start, stop };
 }

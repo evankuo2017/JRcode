@@ -74,6 +74,14 @@ export function useTTS() {
   const spokenRef = useRef("");
   /** 這則回覆有沒有發出過任何聲音（用來分辨「純文字模式」與「一個字都還沒聽到」） */
   const anySpokenRef = useRef(false);
+  /**
+   * 這則回覆已經被使用者打斷了，之後到達的 token 一律不再發聲。
+   *
+   * 沒有這個旗標的話：使用者開口 → cancel() 清空佇列 → 但後端的中止要跑一趟網路，
+   * 這期間 SSE 上還在路上的 token 會繼續進 enqueue，面試官被打斷後又自己講了起來。
+   * 由 reset()（下一則回覆開始）解除。
+   */
+  const suppressedRef = useRef(false);
 
   /** 記錄一句實際播了多少（ratio 0~1），每句只結算一次 */
   const commitSpoken = (text: string, ratio: number) => {
@@ -191,7 +199,7 @@ export function useTTS() {
   /** 接串流 token：湊滿一句就送進合成佇列 */
   const onToken = useCallback(
     (t: string) => {
-      if (!enabledRef.current) return;
+      if (!enabledRef.current || suppressedRef.current) return;
       bufferRef.current += t;
       let idx: number;
       while ((idx = bufferRef.current.search(SENTENCE_END)) >= 0) {
@@ -205,7 +213,7 @@ export function useTTS() {
 
   /** 回覆結束：把最後不足一句的殘句唸完 */
   const onMessageEnd = useCallback(() => {
-    if (!enabledRef.current) {
+    if (!enabledRef.current || suppressedRef.current) {
       bufferRef.current = "";
       return;
     }
@@ -218,6 +226,7 @@ export function useTTS() {
    * 保留 spokenText()——呼叫端需要知道「使用者在被打斷前聽到了哪裡」。
    */
   const cancel = useCallback(() => {
+    suppressedRef.current = true; // 這則回覆到此為止，後續 token 不再發聲
     bufferRef.current = "";
     for (const item of queueRef.current) item.abort.abort();
     queueRef.current = [];
@@ -229,6 +238,7 @@ export function useTTS() {
   /** 新的一則回覆開始：閉嘴，並清掉上一則的「已聽到」紀錄 */
   const reset = useCallback(() => {
     cancel();
+    suppressedRef.current = false; // 新的一則回覆，重新開口
     spokenRef.current = "";
     anySpokenRef.current = false;
     fallbackRef.current = false; // 每則回覆重新給後端一次機會，不因一次失敗就整場降級

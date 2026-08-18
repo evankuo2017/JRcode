@@ -66,6 +66,8 @@ export class Session {
   /** 最近一次打斷帶來的「使用者聽到哪裡」，由當輪的 recordTurn 取用一次 */
   private pendingHeard: string | null = null;
   private reflectionCache: string | null = null;
+  /** 使用者已按下結束：agent 停擺，但 session 還留著給反思讀 Memory */
+  private finished = false;
   private disposed = false;
   private readonly tag: string;
 
@@ -162,8 +164,9 @@ export class Session {
    * 回傳 true 代表真的執行了，false 代表被作廢。
    */
   private runTurn(trigger: string, kind: TurnKind, bornEpoch?: number): Promise<boolean> {
+    const queuedAt = Date.now();
     const run = this.turnChain.then(async () => {
-      if (this.disposed) return false;
+      if (this.disposed || this.finished) return false; // 面試已結束，不再開口
       if (bornEpoch !== undefined && bornEpoch !== this.epoch) {
         logAgent(
           "observer",
@@ -178,7 +181,7 @@ export class Session {
         merged = [...this.droppedUserText, trigger].join("\n");
         this.droppedUserText = [];
       }
-      await this.executeTurn(merged, kind);
+      await this.executeTurn(merged, kind, Date.now() - queuedAt);
       return true;
     });
     this.turnChain = run.then(
@@ -188,7 +191,7 @@ export class Session {
     return run;
   }
 
-  private async executeTurn(trigger: string, kind: TurnKind): Promise<void> {
+  private async executeTurn(trigger: string, kind: TurnKind, queueWaitMs = 0): Promise<void> {
     const snapshotBlock = buildSnapshotBlock(this.memory);
     const llmUserContent = `${trigger}\n\n${snapshotBlock}`;
     const chatMessages: ChatMessage[] = [
@@ -208,9 +211,12 @@ export class Session {
 
     /** 第一個 token 才代表「他真的開口了」；在那之前被打斷等於什麼都沒發生 */
     let spoken = false;
+    const askedAt = Date.now();
+    let ttftMs = 0;
     const onToken = (t: string) => {
       if (!spoken) {
         spoken = true;
+        ttftMs = Date.now() - askedAt;
         this.emit({ type: "thinking", active: false });
         this.emit({ type: "message_start", reason: kind });
       }
@@ -248,7 +254,9 @@ export class Session {
       this.emit({ type: "message_end", interrupted: aborted });
       logAgent(
         "out",
-        `[${this.tag}] AGENT → 回應${aborted ? "（被使用者打斷）" : ""}｜模型：${model}`,
+        `[${this.tag}] AGENT → 回應${aborted ? "（被使用者打斷）" : ""}｜模型：${model}` +
+          // 思考＝排隊等前一輪結束 ＋ 模型吐出第一個字之前的時間。prompt 組裝是純字串運算，不到 1ms
+          `｜思考 ${queueWaitMs + ttftMs} ms（排隊 ${queueWaitMs} + 模型首字 ${ttftMs}）`,
         text
       );
     } catch (err) {
@@ -270,6 +278,8 @@ export class Session {
 
   private async observerTick(): Promise<void> {
     const now = Date.now();
+    if (this.finished || this.disposed) return; // 面試已結束
+    if (!this.hasClients()) return; // 沒有分頁開著，講給誰聽？（重新整理的空窗期跳過一拍即可）
     if (this.busy) return; // 正在思考或說話
     if (!this.openingSent) return;
     if (now < this.observerPausedUntil) return; // 額度冷卻中
@@ -351,13 +361,31 @@ export class Session {
     }
   }
 
-  // ---------- 結束後反思 ----------
+  // ---------- 結束 ----------
+
+  /**
+   * 使用者按下結束 → agent 立刻停止運作。
+   *
+   * session 本身要留著（反思得讀 Memory，而且結果會快取給重新整理用），
+   * 但觀察引擎必須停擺：否則使用者在讀反思的時候，面試官會突然跳出來給提示，
+   * 而且每 30 秒繼續醒來燒額度。正在講的那一輪也直接收掉。
+   */
+  stopAgent(): void {
+    if (this.finished) return;
+    this.finished = true;
+    if (this.observerTimer) {
+      clearInterval(this.observerTimer);
+      this.observerTimer = null;
+    }
+    this.currentAbort?.abort();
+    this.emit({ type: "thinking", active: false });
+    logAgent("system", `[${this.tag}] 面試結束`, "觀察引擎已停止，不再產生任何發話");
+  }
 
   async getReflection(): Promise<string> {
+    this.stopAgent(); // 先讓 agent 閉嘴，再回顧
     if (this.reflectionCache) return this.reflectionCache;
-    // 使用者按結束時面試官可能還在講。先讓他收尾（中止＋等佇列排空），
-    // 否則那一輪還沒寫進 Memory，時間軸會缺最後一塊。
-    this.currentAbort?.abort();
+    // 面試官可能正講到一半被收掉，等佇列排空，否則那一輪還沒寫進 Memory，時間軸會缺最後一塊
     await this.turnChain;
 
     const narrative = renderNarrative(this.memory);
@@ -371,6 +399,7 @@ export class Session {
   }
 
   dispose(): void {
+    this.stopAgent();
     this.disposed = true;
     if (this.observerTimer) clearInterval(this.observerTimer);
     this.currentAbort?.abort();

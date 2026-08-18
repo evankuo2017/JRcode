@@ -36,12 +36,22 @@ export default function Interview() {
     }
   })();
 
+  /** 已按下結束——後端會停掉 agent，這裡再擋一層，殘餘事件不得讓語音復活 */
+  const endingRef = useRef(false);
+
   const tts = useTTS();
   const { items, agentSpeaking, agentThinking, problem: streamedProblem, addUserMessage } =
     useAgentStream(sessionId, {
-      onMessageStart: () => tts.reset(), // 新的一則回覆：閉嘴，並重新開始記「使用者聽到哪裡」
-      onToken: tts.onToken,
-      onMessageEnd: (interrupted) => (interrupted ? tts.cancel() : tts.onMessageEnd()),
+      onMessageStart: () => {
+        if (endingRef.current) return;
+        tts.reset(); // 新的一則回覆：閉嘴，並重新開始記「使用者聽到哪裡」
+      },
+      onToken: (t) => {
+        if (endingRef.current) return;
+        tts.onToken(t);
+      },
+      onMessageEnd: (interrupted) =>
+        interrupted || endingRef.current ? tts.cancel() : tts.onMessageEnd(),
     });
   const problem = streamedProblem ?? cachedProblem;
 
@@ -52,11 +62,27 @@ export default function Interview() {
   // 已經開口了才算「說話中」；還在想的時候要顯示成思考，不然使用者會以為當掉了
   const agentTalking = agentSpeaking || tts.speaking;
   const agentBusyRef = useRef(agentBusy);
-  const agentIdleAtRef = useRef(0);
-  if (agentBusyRef.current !== agentBusy) {
-    agentBusyRef.current = agentBusy;
-    if (!agentBusy) agentIdleAtRef.current = Date.now();
+  agentBusyRef.current = agentBusy;
+  // 回音只可能在「真的有聲音從喇叭出去」時發生。思考中沒有聲音，卻還留著上一則回覆的
+  // 已播內容——拿它來比對會把使用者的話誤判成回音、整句丟掉，所以只看實際播放狀態。
+  const speakingRef = useRef(tts.speaking);
+  const spokeEndedAtRef = useRef(0);
+  if (speakingRef.current !== tts.speaking) {
+    speakingRef.current = tts.speaking;
+    if (!tts.speaking) spokeEndedAtRef.current = Date.now();
   }
+
+  // 思考是一段畫面上什麼都沒有的空白，把秒數顯示出來，才不會像當掉
+  const [thinkingMs, setThinkingMs] = useState(0);
+  useEffect(() => {
+    if (!agentThinking) {
+      setThinkingMs(0);
+      return;
+    }
+    const startedAt = Date.now();
+    const id = setInterval(() => setThinkingMs(Date.now() - startedAt), 100);
+    return () => clearInterval(id);
+  }, [agentThinking]);
 
   const [leftTab, setLeftTab] = useState<"notes" | "problem">("notes");
   const [notes, setNotes] = useState("");
@@ -129,10 +155,11 @@ export default function Interview() {
       tts.cancel(); // 使用者發言，面試官立刻閉嘴
       const heard = tts.spokenText(); // 先結算他聽到哪裡，再讓面試官接話
       addUserMessage(trimmed);
-      // 送訊息前先帶上最新快照，確保 agent 看到的是當下的程式碼
-      void sendSnapshot(sessionId, codeRef.current, notesRef.current).then(() =>
-        sendMessage(sessionId, trimmed, heard)
-      );
+      // 送訊息前先帶上最新快照，確保 agent 看到的是當下的程式碼。
+      // 快照失敗不能拖累發言——catch 之後照樣把話送出去，否則使用者的話會無聲無息消失。
+      void sendSnapshot(sessionId, codeRef.current, notesRef.current)
+        .catch(() => {})
+        .then(() => sendMessage(sessionId, trimmed, heard));
       setInput("");
     },
     [sessionId, addUserMessage, tts]
@@ -142,7 +169,7 @@ export default function Interview() {
     isAgentSpeaking: () => agentBusyRef.current,
     // 面試官還在講、或剛停不久時，麥克風可能收到喇叭的回音；把聽起來就是他自己剛講過的話濾掉
     isSelfEcho: (text) =>
-      (agentBusyRef.current || Date.now() - agentIdleAtRef.current < ECHO_GRACE_MS) &&
+      (speakingRef.current || Date.now() - spokeEndedAtRef.current < ECHO_GRACE_MS) &&
       isEcho(text, tts.spokenText() ?? ""),
     onBargeIn: () => {
       tts.cancel(); // 你一開口，語音先停
@@ -153,6 +180,7 @@ export default function Interview() {
 
   const finish = async () => {
     if (!window.confirm("確定要結束這場面試嗎？結束後無法繼續。")) return;
+    endingRef.current = true;
     tts.cancel();
     speech.stop();
     setEnding(true);
@@ -338,7 +366,7 @@ export default function Interview() {
             {speech.listening ? "🎙️ 聆聽中" : "🎤"}
           </button>
           <input
-            value={speech.interim || input}
+            value={speech.pending + speech.interim || input}
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={(e) => {
               if (e.key === "Enter") submit(input);
