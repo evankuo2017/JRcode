@@ -6,7 +6,8 @@
   "scripts": {
     "dev": "tsx watch src/index.ts",
     "build": "tsc --noEmit",
-    "test:sync": "tsx check-sync.ts"
+    "test:sync": "tsx check-sync.ts",
+    "test:prompt": "tsx check-prompt.ts"
   },
   "dependencies": {
     "cors": "^2.8.5",
