@@ -19,6 +19,7 @@ export interface VisibleMessage {
 export type ServerEvent =
   | { type: "problem"; problem: Problem }
   | { type: "history"; items: VisibleMessage[] }
+  | { type: "thinking"; active: boolean }
   | { type: "message_start"; reason: TurnKind }
   | { type: "token"; text: string }
   | { type: "message_end"; interrupted?: boolean }

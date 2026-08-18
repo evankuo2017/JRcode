@@ -1,10 +1,14 @@
 import type { Problem } from "./types";
 
-export async function checkHealth(): Promise<{
+export interface Health {
   ok: boolean;
   configError: string | null;
   model: string;
-}> {
+  observerModel: string;
+  provider: { kind: "gemini" | "local" | "custom"; host: string };
+}
+
+export async function checkHealth(): Promise<Health> {
   const res = await fetch("/api/health");
   return res.json();
 }
@@ -33,16 +37,25 @@ export async function sessionExists(sessionId: string): Promise<boolean> {
   }
 }
 
-export function sendMessage(sessionId: string, text: string): Promise<Response> {
+/** heard：使用者實際「聽」到的面試官語音內容；null 代表無從得知（純文字模式），後端視同全部已傳達 */
+export function sendMessage(
+  sessionId: string,
+  text: string,
+  heard: string | null = null
+): Promise<Response> {
   return fetch(`/api/session/${sessionId}/message`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ text }),
+    body: JSON.stringify({ text, heard }),
   });
 }
 
-export function sendInterrupt(sessionId: string): Promise<Response> {
-  return fetch(`/api/session/${sessionId}/interrupt`, { method: "POST" });
+export function sendInterrupt(sessionId: string, heard: string | null = null): Promise<Response> {
+  return fetch(`/api/session/${sessionId}/interrupt`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ heard }),
+  });
 }
 
 export function sendSnapshot(

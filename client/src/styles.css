@@ -325,6 +325,12 @@ button {
   color: #81c784;
 }
 
+/* 思考中：還沒開口，畫面上什麼都還沒有——沒有這個狀態使用者會以為當掉了 */
+.turn-indicator.agent-thinking {
+  color: #b0a06a;
+  animation: blink 2s infinite;
+}
+
 .turn-indicator.user-turn {
   color: #64b5f6;
   animation: blink 2s infinite;

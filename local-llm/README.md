@@ -63,9 +63,10 @@ source env.sh && ollama ps                      # 看模型是否載入、是否
 LLM_API_KEY=ollama
 LLM_BASE_URL=http://localhost:11434/v1
 LLM_MODEL=qwen3-coder:30b
-LLM_FALLBACK_MODELS=
-OBSERVER_MODEL=qwen3-coder:30b
 ```
+
+（不用設 `OBSERVER_MODEL`——沒設的話觀察引擎就跟對話用同一顆模型，正是本機自架要的。
+JRcode 也不會在跑到一半自動換模型，你設什麼就一直是什麼。）
 
 - **模型和 JRcode 在同一台** → `LLM_BASE_URL` 用 `http://localhost:11434/v1`。
 - **模型在另一台**（例如 GPU 工作站）→ 改成那台的區網 IP，例如

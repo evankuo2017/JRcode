@@ -14,6 +14,11 @@ export interface TurnEvent extends BaseEvent {
   llmUserContent: string;
   assistantText: string;
   interrupted: boolean;
+  /**
+   * 被打斷時，使用者實際「聽」到的內容（前端語音佇列已播出的部分）。
+   * undefined 代表無從得知（純文字模式），視同 assistantText 全部已傳達。
+   */
+  heardText?: string;
   model?: string;
 }
 
@@ -134,11 +139,6 @@ export class Memory {
     return latest;
   }
 
-  /** 使用者最後一次「有在動」的時間——程式碼、筆記、發言取最晚 */
-  lastEngagementAt(): number {
-    return Math.max(this.lastCodeChangeAt(), this.lastNotesChangeAt(), this.lastUserActivityAt());
-  }
-
   lastInterventionAt(): number {
     let latest = 0;
     for (const t of this.turns()) {
@@ -193,6 +193,58 @@ const MAX_CONTEXT_TURNS = 60; // 只從送給模型的視圖裁掉最舊的，Me
 const SNAPSHOT_BLOCK_RE = /<snapshot_meta>[\s\S]*?<\/current_notes>/;
 const OMITTED_PLACEHOLDER = "（先前的程式碼與筆記快照已省略，最新狀態見最後一則訊息）";
 
+/**
+ * 找出 heardText 在原文中的結束位置。
+ *
+ * heardText 是 assistantText 經過語音清理（拿掉 markdown 記號、引號、程式碼區塊）後的前綴，
+ * 不是原文的字面前綴。清理只做刪除、不改順序，所以用貪婪的子序列比對就能對回原文；
+ * 對不上時提早結束，寧可低估使用者聽到的量，也不要謊報他聽過。
+ */
+function heardBoundary(full: string, heard: string): number {
+  let i = 0;
+  for (let j = 0; j < heard.length; j++) {
+    while (i < full.length && full[i] !== heard[j]) i++;
+    if (i >= full.length) return full.length;
+    i++;
+  }
+  return i;
+}
+
+/**
+ * 被打斷的回覆要拆成「他真的聽到的」跟「他沒聽到的」兩段講給模型聽。
+ *
+ * 直接把 assistantText 整段丟回去（就算附註「未說完」）會讓模型以為這些話都送達了，
+ * 於是後續對話建立在一段對方根本沒聽過的內容上——這是打斷機制最容易出錯的地方。
+ *
+ * 但也不能反過來要求它一定要把沒說完的話補完：真人面試官被打斷時，會看對方講了什麼
+ * 才決定要不要接回去。所以這裡只負責「告知事實」，補不補講交給模型自己判斷，
+ * 並且明確要求主軸放在使用者現在說的內容上。
+ */
+const FOLLOW_UP_NOTE =
+  "要不要把這段補回來由你自己判斷：回應的主軸是使用者現在說的話，" +
+  "只有在這段資訊仍然影響他接下來的思路時才順勢帶回去，而且要接得自然，不要像在重播";
+
+function renderAssistantTurn(t: TurnEvent): string {
+  if (!t.interrupted) return t.assistantText;
+  if (t.heardText === undefined) return `${t.assistantText}\n（此回覆被使用者打斷，未說完）`;
+
+  const cut = heardBoundary(t.assistantText, t.heardText);
+  const heard = t.assistantText.slice(0, cut).trim();
+  const unheard = t.assistantText.slice(cut).trim();
+
+  if (!unheard) return `${heard}\n（說到這裡使用者就接話了。）`;
+  if (!heard) {
+    return (
+      `（你這則回覆還沒發出聲音，使用者就先開口了，他完全沒聽到：「${t.assistantText.trim()}」` +
+      `——不要假設他知道這些內容。${FOLLOW_UP_NOTE}）`
+    );
+  }
+  return (
+    `${heard}\n（你接下來正要說「${unheard}」，但使用者在這裡打斷了你，這段話他沒有聽到，` +
+    `不要假設他知道。${FOLLOW_UP_NOTE}）`
+  );
+}
+
 /** 組送給模型的訊息陣列：system + 過去輪次（舊快照精簡）。呼叫端負責附加當前這一輪。 */
 export function buildChatMessages(memory: Memory, systemPrompt: string): ChatMessage[] {
   const turns = memory.turns();
@@ -206,10 +258,7 @@ export function buildChatMessages(memory: Memory, systemPrompt: string): ChatMes
       : t.llmUserContent.replace(SNAPSHOT_BLOCK_RE, OMITTED_PLACEHOLDER);
     messages.push({ role: "user", content: userContent });
     // 助理回覆文字永遠完整保留——提示階梯的歷史就藏在這裡，不需要額外機制去記
-    messages.push({
-      role: "assistant",
-      content: t.interrupted ? `${t.assistantText}\n（此回覆被使用者打斷，未說完）` : t.assistantText,
-    });
+    messages.push({ role: "assistant", content: renderAssistantTurn(t) });
   });
 
   return messages;
@@ -239,6 +288,19 @@ const TURN_LABEL: Record<TurnKind, string> = {
   check_in: "面試官（關心）",
 };
 
+/** 時間軸上的打斷註記——反思要看的是「他到底聽進去多少」，不只是「有沒有被打斷」 */
+function interruptNote(e: TurnEvent): string {
+  if (!e.interrupted) return "";
+  if (e.heardText === undefined) return "（被打斷，未說完）";
+  const cut = heardBoundary(e.assistantText, e.heardText);
+  const unheard = e.assistantText.slice(cut).trim();
+  if (!unheard) return "（說完後才被打斷）";
+  const heard = e.assistantText.slice(0, cut).trim();
+  return heard
+    ? `（被打斷；使用者只聽到「${heard}」，後半段沒聽到）`
+    : "（被打斷；使用者完全沒聽到這段）";
+}
+
 /** 把所有事件（不只對話輪次）依時間序轉成人類可讀的文字時間軸，給面試結束反思用 */
 export function renderNarrative(memory: Memory): string {
   const start = memory.all()[0]?.at ?? Date.now();
@@ -249,7 +311,7 @@ export function renderNarrative(memory: Memory): string {
     switch (e.type) {
       case "turn":
         if (e.kind === "reply") lines.push(`[${t}] 使用者：「${e.trigger}」`);
-        lines.push(`[${t}] ${TURN_LABEL[e.kind]}：「${e.assistantText}」${e.interrupted ? "（被打斷，未說完）" : ""}`);
+        lines.push(`[${t}] ${TURN_LABEL[e.kind]}：「${e.assistantText}」${interruptNote(e)}`);
         break;
       case "code_snapshot":
         lines.push(`[${t}] 程式碼更新`);

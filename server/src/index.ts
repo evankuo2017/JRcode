@@ -9,10 +9,19 @@ const app = express();
 app.use(cors());
 app.use(express.json({ limit: "1mb" }));
 
-/** 健康檢查 + 設定檢查（前端首頁用來判斷 key 是否已設定） */
+/**
+ * 健康檢查 + 設定檢查。前端首頁用來判斷能不能開始，
+ * 並顯示「現在實際會用哪個模型」——模型全程由使用者的 .env 決定，不會被系統換掉。
+ */
 app.get("/api/health", (_req, res) => {
   const configError = assertConfigured();
-  res.json({ ok: !configError, configError, model: config.model });
+  res.json({
+    ok: !configError,
+    configError,
+    model: config.model,
+    observerModel: config.observerModel,
+    provider: config.provider,
+  });
 });
 
 /** 開始模擬：抓題 → 建 session */
@@ -67,15 +76,21 @@ app.post("/api/session/:id/message", (req, res) => {
     res.status(400).json({ error: "empty message" });
     return;
   }
-  void session.userMessage(text); // 回覆走 SSE，不等
+  void session.userMessage(text, heardOf(req.body)); // 回覆走 SSE，不等
   res.json({ ok: true });
 });
 
 /** 使用者開始說話 → 打斷模型輸出 */
 app.post("/api/session/:id/interrupt", (req, res) => {
-  sessions.get(req.params.id)?.interrupt();
+  sessions.get(req.params.id)?.interrupt(heardOf(req.body));
   res.json({ ok: true });
 });
+
+/** 前端回報的「使用者實際聽到的內容」；不是字串代表無從得知，交給 session 當作全部已傳達 */
+function heardOf(body: unknown): string | null {
+  const heard = (body as { heard?: unknown } | undefined)?.heard;
+  return typeof heard === "string" ? heard : null;
+}
 
 /** 程式碼 + 筆記快照 */
 app.post("/api/session/:id/snapshot", (req, res) => {
@@ -145,9 +160,20 @@ setInterval(() => {
   }
 }, 5 * 60_000);
 
+const PROVIDER_LABEL: Record<typeof config.provider.kind, string> = {
+  gemini: "Gemini 免費額度",
+  local: "本機自架模型",
+  custom: "自訂供應商",
+};
+
 app.listen(config.port, () => {
   console.log(`[server] http://localhost:${config.port}`);
   const configError = assertConfigured();
   if (configError) console.warn(`[server] ⚠ ${configError}`);
-  else console.log(`[server] 模型：${config.model}`);
+  console.log(
+    `[server] 模型：${config.model}（${PROVIDER_LABEL[config.provider.kind]}：${config.provider.host}）`
+  );
+  if (config.observerModel !== config.model) {
+    console.log(`[server] 觀察引擎另用：${config.observerModel}`);
+  }
 });

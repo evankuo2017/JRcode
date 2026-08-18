@@ -13,6 +13,8 @@ export interface StreamHandlers {
 export function useAgentStream(sessionId: string | null, handlers?: StreamHandlers) {
   const [items, setItems] = useState<ChatItem[]>([]);
   const [agentSpeaking, setAgentSpeaking] = useState(false);
+  /** 面試官正在想，但還沒開口——第一個 token 出現前的那段空白 */
+  const [agentThinking, setAgentThinking] = useState(false);
   const [problem, setProblem] = useState<Problem | null>(null);
   const streamingIdRef = useRef<number | null>(null);
   const handlersRef = useRef(handlers);
@@ -39,6 +41,9 @@ export function useAgentStream(sessionId: string | null, handlers?: StreamHandle
             }))
           );
           break;
+        case "thinking":
+          setAgentThinking(event.active);
+          break;
         case "message_start": {
           const id = nextId++;
           streamingIdRef.current = id;
@@ -60,6 +65,7 @@ export function useAgentStream(sessionId: string | null, handlers?: StreamHandle
           break;
         case "message_end":
           setAgentSpeaking(false);
+          setAgentThinking(false);
           handlersRef.current?.onMessageEnd?.(event.interrupted);
           setItems((prev) =>
             prev.map((it) =>
@@ -86,5 +92,5 @@ export function useAgentStream(sessionId: string | null, handlers?: StreamHandle
     setItems((prev) => [...prev, { id: nextId++, role: "user", text }]);
   };
 
-  return { items, agentSpeaking, problem, addUserMessage };
+  return { items, agentSpeaking, agentThinking, problem, addUserMessage };
 }

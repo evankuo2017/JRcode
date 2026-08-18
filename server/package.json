@@ -5,7 +5,8 @@
   "type": "module",
   "scripts": {
     "dev": "tsx watch src/index.ts",
-    "build": "tsc --noEmit"
+    "build": "tsc --noEmit",
+    "test:sync": "tsx check-sync.ts"
   },
   "dependencies": {
     "cors": "^2.8.5",

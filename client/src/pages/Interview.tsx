@@ -5,6 +5,7 @@ import { useAgentStream } from "../hooks/useAgentStream";
 import { useSpeech } from "../hooks/useSpeech";
 import { useTTS } from "../hooks/useTTS";
 import { endSession, getReflection, sendInterrupt, sendMessage, sendSnapshot } from "../api";
+import { isEcho } from "../echo";
 import ReflectionScreen from "../components/ReflectionScreen";
 import type { Problem } from "../types";
 
@@ -17,6 +18,9 @@ const LANGUAGES = [
 ];
 
 const SNAPSHOT_DEBOUNCE_MS = 2000;
+
+/** 面試官停止說話後，這段時間內的辨識結果仍要過回音檢查（喇叭餘音還在辨識器的緩衝裡） */
+const ECHO_GRACE_MS = 1500;
 
 /** 題目分頁僅供開發驗證用；正式情境下使用者只能從與面試官的對談中了解題目 */
 const SHOW_PROBLEM_TAB = import.meta.env.DEV;
@@ -33,13 +37,26 @@ export default function Interview() {
   })();
 
   const tts = useTTS();
-  const { items, agentSpeaking, problem: streamedProblem, addUserMessage } =
+  const { items, agentSpeaking, agentThinking, problem: streamedProblem, addUserMessage } =
     useAgentStream(sessionId, {
-      onMessageStart: () => tts.cancel(),
+      onMessageStart: () => tts.reset(), // 新的一則回覆：閉嘴，並重新開始記「使用者聽到哪裡」
       onToken: tts.onToken,
       onMessageEnd: (interrupted) => (interrupted ? tts.cancel() : tts.onMessageEnd()),
     });
   const problem = streamedProblem ?? cachedProblem;
+
+  // 面試官「輪到他」＝正在想、正在生成、或語音佇列還沒播完。
+  // 三個都要算：語音落後 token 串流好幾秒，而思考期間畫面上什麼都還沒出現，
+  // 少算任何一個都會在他還沒講完時就顯示「換你說了」。
+  const agentBusy = agentThinking || agentSpeaking || tts.speaking;
+  // 已經開口了才算「說話中」；還在想的時候要顯示成思考，不然使用者會以為當掉了
+  const agentTalking = agentSpeaking || tts.speaking;
+  const agentBusyRef = useRef(agentBusy);
+  const agentIdleAtRef = useRef(0);
+  if (agentBusyRef.current !== agentBusy) {
+    agentBusyRef.current = agentBusy;
+    if (!agentBusy) agentIdleAtRef.current = Date.now();
+  }
 
   const [leftTab, setLeftTab] = useState<"notes" | "problem">("notes");
   const [notes, setNotes] = useState("");
@@ -99,10 +116,10 @@ export default function Interview() {
   notesRef.current = notes;
   useEffect(() => {
     if (!sessionId) return;
-    const t = setTimeout(() => {
+    const timer = setTimeout(() => {
       void sendSnapshot(sessionId, codeRef.current, notesRef.current);
     }, SNAPSHOT_DEBOUNCE_MS);
-    return () => clearTimeout(t);
+    return () => clearTimeout(timer);
   }, [sessionId, code, notes]);
 
   const submit = useCallback(
@@ -110,10 +127,11 @@ export default function Interview() {
       const trimmed = text.trim();
       if (!trimmed || !sessionId) return;
       tts.cancel(); // 使用者發言，面試官立刻閉嘴
+      const heard = tts.spokenText(); // 先結算他聽到哪裡，再讓面試官接話
       addUserMessage(trimmed);
       // 送訊息前先帶上最新快照，確保 agent 看到的是當下的程式碼
       void sendSnapshot(sessionId, codeRef.current, notesRef.current).then(() =>
-        sendMessage(sessionId, trimmed)
+        sendMessage(sessionId, trimmed, heard)
       );
       setInput("");
     },
@@ -121,9 +139,14 @@ export default function Interview() {
   );
 
   const speech = useSpeech({
-    onSpeechStart: () => {
+    isAgentSpeaking: () => agentBusyRef.current,
+    // 面試官還在講、或剛停不久時，麥克風可能收到喇叭的回音；把聽起來就是他自己剛講過的話濾掉
+    isSelfEcho: (text) =>
+      (agentBusyRef.current || Date.now() - agentIdleAtRef.current < ECHO_GRACE_MS) &&
+      isEcho(text, tts.spokenText() ?? ""),
+    onBargeIn: () => {
       tts.cancel(); // 你一開口，語音先停
-      if (sessionId && agentSpeaking) void sendInterrupt(sessionId);
+      if (sessionId) void sendInterrupt(sessionId, tts.spokenText());
     },
     onFinalResult: (text) => submit(text),
   });
@@ -279,8 +302,24 @@ export default function Interview() {
             <div ref={chatEndRef} />
           </div>
         ) : (
-          <div className={`turn-indicator ${agentSpeaking ? "agent-speaking" : speech.listening ? "user-turn" : "idle"}`}>
-            {agentSpeaking ? "🗣️ 面試官說話中" : speech.listening ? "🎙️ 換你說了" : "…"}
+          <div
+            className={`turn-indicator ${
+              agentTalking
+                ? "agent-speaking"
+                : agentThinking
+                  ? "agent-thinking"
+                  : speech.listening
+                    ? "user-turn"
+                    : "idle"
+            }`}
+          >
+            {agentTalking
+              ? "🗣️ 面試官說話中"
+              : agentThinking
+                ? "🤔 面試官思考中"
+                : speech.listening
+                  ? "🎙️ 換你說了"
+                  : "…"}
           </div>
         )}
         <div className="chat-input">

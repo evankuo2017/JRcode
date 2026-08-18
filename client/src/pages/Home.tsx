@@ -1,11 +1,17 @@
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { checkHealth, endSession, sessionExists, startSession } from "../api";
+import { checkHealth, endSession, sessionExists, startSession, type Health } from "../api";
+
+const PROVIDER_LABEL: Record<Health["provider"]["kind"], string> = {
+  gemini: "Gemini 免費額度",
+  local: "本機自架模型",
+  custom: "自訂供應商",
+};
 
 export default function Home() {
   const navigate = useNavigate();
-  const [configError, setConfigError] = useState<string | null>(null);
-  const [model, setModel] = useState("");
+  const [health, setHealth] = useState<Health | null>(null);
+  const [serverDown, setServerDown] = useState(false);
   const [difficulty, setDifficulty] = useState<string>("");
   const [starting, setStarting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -13,11 +19,8 @@ export default function Home() {
 
   useEffect(() => {
     checkHealth()
-      .then((h) => {
-        setConfigError(h.configError);
-        setModel(h.model);
-      })
-      .catch(() => setConfigError("後端伺服器沒有回應，請確認 npm run dev 是否正常啟動。"));
+      .then(setHealth)
+      .catch(() => setServerDown(true));
 
     // 有進行中的面試（誤觸上一頁/重新整理跳回來）就提供繼續選項
     const existingId = sessionStorage.getItem("sessionId");
@@ -52,6 +55,10 @@ export default function Home() {
     }
   };
 
+  const configError = serverDown
+    ? "後端伺服器沒有回應，請確認 npm run dev 是否正常啟動。"
+    : health?.configError ?? null;
+
   return (
     <div className="home">
       <h1>AI 模擬程式面試</h1>
@@ -73,7 +80,10 @@ export default function Home() {
       {configError ? (
         <div className="notice error">{configError}</div>
       ) : (
-        <p className="model-info">模型：{model || "…"}</p>
+        <p className="model-info">
+          模型：{health?.model ?? "…"}
+          {health && `（${PROVIDER_LABEL[health.provider.kind]}）`}
+        </p>
       )}
       {error && <div className="notice error">{error}</div>}
 
